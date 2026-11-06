@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import date
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+import streamlit as st
+from loguru import logger
 
-import streamlit as st  # noqa: E402
-from loguru import logger  # noqa: E402
-
-from src.charts import (  # noqa: E402
+from quant_analytics.charts import (
     figure_to_html,
     plot_cumulative_ic,
     plot_group_cumulative,
@@ -21,21 +15,21 @@ from src.charts import (  # noqa: E402
     plot_long_short,
     plot_turnover,
 )
-from src.db import (  # noqa: E402
+from quant_analytics.db import (
     DataAccessError,
     get_available_options,
     get_factor_data,
     get_factor_date_range,
 )
-from src.logging_utils import configure_logging  # noqa: E402
-from src.metrics import (  # noqa: E402
+from quant_analytics.logging_utils import configure_logging
+from quant_analytics.metrics import (
     calc_daily_ic,
     calc_ic_summary,
     calc_quantile_returns,
     calc_return_statistics,
     calc_turnover,
 )
-from src.theme import is_dark, theme_caption  # noqa: E402
+from quant_analytics.theme import is_dark, theme_caption
 
 st.set_page_config(page_title="因子深度分析", page_icon=":material/science:", layout="wide")
 configure_logging()

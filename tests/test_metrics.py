@@ -7,7 +7,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from src.metrics import (
+from quant_analytics.metrics import (
     calc_cumulative_returns,
     calc_daily_ic,
     calc_drawdown,

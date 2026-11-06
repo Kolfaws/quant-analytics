@@ -5,7 +5,7 @@
 * 所有连接都使用 ``duckdb.connect(path, read_only=True)``，不锁库；
 * 所有公开查询函数都加 ``@st.cache_data(ttl=3600)``；
 * 数据库异常统一包装成 :class:`DataAccessError`，由页面用 ``st.error`` 展示；
-* 这里只做查询，不做指标计算（计算在 ``src.metrics``）。
+* 这里只做查询，不做指标计算（计算在 ``quant_analytics.metrics``）。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import polars as pl
 import streamlit as st
 from loguru import logger
 
-PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
+PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 
 
 def _load_dotenv(path: Path | None = None) -> None:
@@ -107,9 +107,9 @@ def _resolve_run_id(con: duckdb.DuckDBPyConnection, requested: str) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_available_options() -> tuple[
-    list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]
-]:
+def get_available_options() -> (
+    tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]
+):
     """返回 (策略列表, 基准列表, 因子列表)。
 
     单个库不可用时返回空列表，页面根据空列表给出提示，不直接崩。
@@ -197,11 +197,11 @@ def get_nav_data(strategy_id: str, baseline_id: str) -> pl.DataFrame:
                 """,
                 [run_id, baseline_id],
                 {
-                    "trade_date": pl.Date,
-                    "strategy_nav": pl.Float64,
-                    "strategy_ret": pl.Float64,
-                    "baseline_nav": pl.Float64,
-                    "baseline_ret": pl.Float64,
+                    "trade_date": pl.Date(),
+                    "strategy_nav": pl.Float64(),
+                    "strategy_ret": pl.Float64(),
+                    "baseline_nav": pl.Float64(),
+                    "baseline_ret": pl.Float64(),
                 },
             )
     except DataAccessError:
@@ -250,10 +250,10 @@ def get_factor_data(factor_name: str, start_date: str, end_date: str) -> pl.Data
                 """,
                 [factor_id, start_date, end_date],
                 {
-                    "ts_code": pl.Utf8,
-                    "trade_date": pl.Date,
-                    "factor_value": pl.Float64,
-                    "close": pl.Float64,
+                    "ts_code": pl.Utf8(),
+                    "trade_date": pl.Date(),
+                    "factor_value": pl.Float64(),
+                    "close": pl.Float64(),
                 },
             )
     except DataAccessError:

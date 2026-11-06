@@ -2,25 +2,18 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import streamlit as st
+from loguru import logger
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-import streamlit as st  # noqa: E402
-from loguru import logger  # noqa: E402
-
-from src.charts import figure_to_html, plot_drawdown, plot_equity_curves  # noqa: E402
-from src.db import DataAccessError, get_available_options, get_nav_data  # noqa: E402
-from src.logging_utils import configure_logging  # noqa: E402
-from src.metrics import (  # noqa: E402
+from quant_analytics.charts import figure_to_html, plot_drawdown, plot_equity_curves
+from quant_analytics.db import DataAccessError, get_available_options, get_nav_data
+from quant_analytics.logging_utils import configure_logging
+from quant_analytics.metrics import (
     calc_cumulative_returns,
     calc_drawdown,
     calc_performance_metrics,
 )
-from src.theme import is_dark, theme_caption  # noqa: E402
+from quant_analytics.theme import is_dark, theme_caption
 
 st.set_page_config(page_title="策略与基准对比", page_icon=":material/monitoring:", layout="wide")
 configure_logging()

@@ -294,7 +294,8 @@ def figure_to_html(fig: go.Figure, *, dark: bool = False, subtitle: str = "") ->
     """
     export = go.Figure(fig)
     _apply_theme(export, dark)
-    title = str(export.layout.title.text or "Quant Analytics").strip()
+    title_obj = getattr(export.layout, "title", None)
+    title = str(getattr(title_obj, "text", None) or "Quant Analytics").strip()
     export.update_layout(title_text="", margin=dict(l=12, r=12, t=16, b=12))
     title_html = html_lib.escape(title)
     subtitle_html = f'<p class="subtitle">{html_lib.escape(subtitle)}</p>' if subtitle else ""

@@ -6,18 +6,11 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import streamlit as st
 
-ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-import streamlit as st  # noqa: E402
-
-from src.db import get_available_options  # noqa: E402
-from src.logging_utils import configure_logging  # noqa: E402
-from src.theme import theme_caption  # noqa: E402
+from quant_analytics.db import get_available_options
+from quant_analytics.logging_utils import configure_logging
+from quant_analytics.theme import theme_caption
 
 st.set_page_config(
     page_title="Quant Analytics",

@@ -28,11 +28,13 @@ quant-analytics/
 ├── pages/
 │   ├── 1_factor_analysis.py
 │   └── 2_strategy_baseline.py
-├── src/
+├── src/quant_analytics/
 │   ├── __init__.py
 │   ├── db.py                # 只读 DuckDB + st.cache_data
 │   ├── metrics.py           # Polars 向量化指标
 │   ├── charts.py            # Plotly 封装
+│   ├── theme.py             # Light / Dark 主题适配
+│   ├── py.typed             # PEP 561 类型标记
 │   └── logging_utils.py     # loguru
 ├── tests/test_metrics.py    # IC / 绩效 / 分层 / 换手
 ├── .streamlit/config.toml
@@ -43,6 +45,14 @@ quant-analytics/
 ├── pyproject.toml
 └── README.md
 ```
+
+`quant-analytics` 是正式的可安装包：
+
+- distribution：`quant-analytics`
+- import 包：`quant_analytics`
+- `uv sync` 会以 editable 模式安装到 `.venv`；
+- 页面只使用 `from quant_analytics...`，没有 `sys.path.insert`；
+- pytest 通过 `pyproject.toml` 的 `pythonpath = ["src"]` 解析源码目录。
 
 ## 3. 安装
 
@@ -99,7 +109,7 @@ Get-NetTCPConnection -LocalPort 8501 | Select-Object -ExpandProperty OwningProce
 - 点击右上角菜单 **Settings → Theme**，选择 **Light / Dark / System**；
 - 页面、KPI、图表和导出的 HTML 都会跟随当前主题；
 - 未做主题选择时默认使用 `.streamlit/config.toml` 的 `base = "light"`；
-- 主题实现见 [src/theme.py](src/theme.py)。
+- 主题实现见 [src/quant_analytics/theme.py](src/quant_analytics/theme.py)。
 
 ### 环境变量
 
