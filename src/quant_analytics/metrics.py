@@ -18,6 +18,13 @@ import polars as pl
 TRADING_DAYS: Final[int] = 252
 
 
+def _to_float(value: object) -> float:
+    """把 Polars 的数值聚合结果安全转成 float，并给类型检查器明确类型。"""
+    if isinstance(value, bool) or not isinstance(value, int | float | np.floating):
+        raise TypeError(f"期望数值，实际为 {type(value).__name__}")
+    return float(value)
+
+
 # ---------------------------------------------------------------------------
 # 基础序列指标
 # ---------------------------------------------------------------------------
@@ -39,17 +46,17 @@ def _series_metrics(returns: pl.Series) -> dict[str, float | None]:
             "win_rate": None,
         }
     count = series.len()
-    gross = float((1.0 + series).product())
+    gross = _to_float((1.0 + series).product())
     annual = None if gross <= 0 else gross ** (TRADING_DAYS / count) - 1.0
-    volatility = float(series.std(ddof=1)) * math.sqrt(TRADING_DAYS) if count > 1 else None
-    std = float(series.std(ddof=1)) if count > 1 else 0.0
-    sharpe = float(series.mean()) / std * math.sqrt(TRADING_DAYS) if std and std > 0 else None
+    volatility = _to_float(series.std(ddof=1)) * math.sqrt(TRADING_DAYS) if count > 1 else None
+    std = _to_float(series.std(ddof=1)) if count > 1 else 0.0
+    sharpe = _to_float(series.mean()) / std * math.sqrt(TRADING_DAYS) if std and std > 0 else None
     nav = (1.0 + series).cum_prod()
     drawdown = nav / nav.cum_max() - 1.0
-    max_dd = float(drawdown.min())
+    max_dd = _to_float(drawdown.min())
     calmar = annual / abs(max_dd) if annual is not None and max_dd < 0 else None
     active = series.filter(series != 0)
-    win = float((active > 0).mean()) if not active.is_empty() else None
+    win = _to_float((active > 0).mean()) if not active.is_empty() else None
     return {
         "annual_return": annual,
         "annual_volatility": volatility,
@@ -113,6 +120,13 @@ def calc_performance_metrics(df: pl.DataFrame) -> dict[str, float | None]:
     )
     active = _series_metrics(aligned["active_ret"]) if not aligned.is_empty() else {}
     beta = _beta(aligned)
+    active_return = active.get("annual_return")
+    active_volatility = active.get("annual_volatility")
+    information_ratio = (
+        active_return / active_volatility
+        if active_return is not None and active_volatility
+        else None
+    )
     metrics: dict[str, float | None] = {
         "strategy_annual_return": strategy["annual_return"],
         "baseline_annual_return": baseline["annual_return"],
@@ -124,12 +138,8 @@ def calc_performance_metrics(df: pl.DataFrame) -> dict[str, float | None]:
         "calmar_ratio": strategy["calmar"],
         "win_rate": strategy["win_rate"],
         "annual_volatility": strategy["annual_volatility"],
-        "tracking_error": active.get("annual_volatility"),
-        "information_ratio": (
-            active["annual_return"] / active["annual_volatility"]
-            if active.get("annual_return") is not None and active.get("annual_volatility")
-            else None
-        ),
+        "tracking_error": active_volatility,
+        "information_ratio": information_ratio,
         "beta": beta,
     }
     return metrics
@@ -172,10 +182,10 @@ def calc_daily_ic(
     if frame.is_empty():
         return pl.DataFrame(
             schema={
-                "trade_date": pl.Date,
-                "ic": pl.Float64,
-                "rank_ic": pl.Float64,
-                "n": pl.UInt32,
+                "trade_date": pl.Date(),
+                "ic": pl.Float64(),
+                "rank_ic": pl.Float64(),
+                "n": pl.UInt32(),
             }
         )
     ranked = frame.with_columns(
@@ -212,14 +222,16 @@ def calc_ic_summary(ic_df: pl.DataFrame) -> dict[str, float | None]:
             "n_days": 0,
         }
 
-    def _summary(column: str) -> tuple[float | None, float | None, float | None, float | None]:
+    def _summary(
+        column: str,
+    ) -> tuple[float | None, float | None, float | None, float | None]:
         series = _clean(ic_df[column])
         if series.is_empty():
             return None, None, None, None
-        mean = float(series.mean())
-        std = float(series.std(ddof=1)) if series.len() > 1 else 0.0
+        mean = _to_float(series.mean())
+        std = _to_float(series.std(ddof=1)) if series.len() > 1 else 0.0
         icir = mean / std if std > 0 else None
-        win = float((series > 0).mean())
+        win = _to_float((series > 0).mean())
         return mean, std, icir, win
 
     ic_mean, ic_std, icir, ic_win = _summary("ic")
@@ -274,15 +286,15 @@ def calc_quantile_returns(
     if assigned.is_empty():
         return pl.DataFrame(
             schema={
-                "trade_date": pl.Date,
-                "group": pl.Int32,
-                "group_ret": pl.Float64,
-                "group_cum": pl.Float64,
-                "top_only_ret": pl.Float64,
-                "long_short_ret": pl.Float64,
-                "top_only_cum": pl.Float64,
-                "long_short_cum": pl.Float64,
-                "n": pl.UInt32,
+                "trade_date": pl.Date(),
+                "group": pl.Int32(),
+                "group_ret": pl.Float64(),
+                "group_cum": pl.Float64(),
+                "top_only_ret": pl.Float64(),
+                "long_short_ret": pl.Float64(),
+                "top_only_cum": pl.Float64(),
+                "long_short_cum": pl.Float64(),
+                "n": pl.UInt32(),
             }
         )
 
@@ -333,7 +345,11 @@ def calc_turnover(
     assigned = _assign_groups(df, factor_col, "forward_return", n_groups)
     if assigned.is_empty():
         return pl.DataFrame(
-            schema={"trade_date": pl.Date, "turnover": pl.Float64, "top_n": pl.UInt32}
+            schema={
+                "trade_date": pl.Date(),
+                "turnover": pl.Float64(),
+                "top_n": pl.UInt32(),
+            }
         )
 
     top = assigned.filter(pl.col("group") == 1).select("trade_date", "ts_code")

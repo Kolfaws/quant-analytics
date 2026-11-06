@@ -18,14 +18,20 @@ dependencies = [
     "streamlit>=1.50.0",
 ]
 
-# 这是一个应用，不构建/发布 wheel：uv 只同步依赖，不安装自己
-[tool.uv]
-package = false
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "quant_analytics"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.pyright]
+extraPaths = ["src"]
 
 [tool.ruff]
 target-version = "py313"
