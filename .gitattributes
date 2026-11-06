@@ -1,0 +1,54 @@
+# =============================================================================
+# .gitattributes — 换行符与二进制文件规则
+#
+# 原则：文本统一 LF；二进制交给 Git 直通；Windows 脚本保留 CRLF。
+# =============================================================================
+
+* text=auto eol=lf
+
+*.py        text eol=lf
+*.pyi       text eol=lf
+*.md        text eol=lf
+*.toml      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.ini       text eol=lf
+*.cfg       text eol=lf
+*.txt       text eol=lf
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.svg       text eol=lf
+
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+*.db          binary
+*.db-journal  binary
+*.db-wal      binary
+*.db-shm      binary
+*.duckdb      binary
+*.duckdb.wal  binary
+*.sqlite      binary
+*.sqlite3     binary
+*.parquet     binary
+*.feather     binary
+*.arrow       binary
+*.pkl         binary
+*.h5          binary
+*.hdf5        binary
+*.npz         binary
+*.zip         binary
+*.gz          binary
+*.tar         binary
+*.pdf         binary
+*.png         binary
+*.jpg         binary
+*.jpeg        binary
+*.gif         binary
+*.ico         binary
+*.xls         binary
+*.xlsx        binary
+*.docx        binary
+*.pptx        binary

@@ -1,0 +1,26 @@
+# =============================================================================
+# Streamlit 主题与服务器配置
+#
+# 默认亮色；用户可在右上角 Settings → Theme 切换 Light / Dark / System。
+# Plotly 图表与导出的 HTML 会跟随当前主题（见 src/theme.py）。
+# =============================================================================
+
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F4F6"
+textColor = "#111827"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"
+showErrorDetails = true
