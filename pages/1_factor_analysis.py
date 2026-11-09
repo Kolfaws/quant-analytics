@@ -47,7 +47,10 @@ def _num(value: float | None, digits: int = 2) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
-_, _, factors = get_available_options()
+env_label = st.sidebar.radio("数据环境", ["正式", "测试"], horizontal=True, key="data_env")
+env = "test" if env_label == "测试" else "prod"
+
+_, _, factors = get_available_options(env=env)
 
 with st.sidebar:
     st.header("因子分析")
@@ -60,7 +63,7 @@ with st.sidebar:
         format_func=lambda item: item["label"],
     )
     factor_name = factor["factor_name"]
-    factor_range = get_factor_date_range(factor_name)
+    factor_range = get_factor_date_range(factor_name, env=env)
 
     if factor_range:
         min_date, max_date = factor_range
@@ -93,7 +96,7 @@ if start_date > end_date:
 
 try:
     with st.spinner("计算因子指标…"):
-        raw = get_factor_data(factor_name, start_date.isoformat(), end_date.isoformat())
+        raw = get_factor_data(factor_name, start_date.isoformat(), end_date.isoformat(), env=env)
         ic_df = calc_daily_ic(raw)
         ic_summary = calc_ic_summary(ic_df)
         daily = calc_quantile_returns(raw, n_groups=n_groups)

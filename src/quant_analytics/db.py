@@ -45,6 +45,24 @@ def _env_path(name: str) -> Path | None:
 
 MARKET_DB_PATH: Final[Path | None] = _env_path("MARKET_DB_PATH")
 BACKTEST_DB_PATH: Final[Path | None] = _env_path("BACKTEST_DB_PATH")
+MARKET_TEST_DB_PATH: Final[Path | None] = _env_path("MARKET_TEST_DB_PATH")
+BACKTEST_TEST_DB_PATH: Final[Path | None] = _env_path("BACKTEST_TEST_DB_PATH")
+
+
+def _market_path(env: str) -> Path | None:
+    _validate_env(env)
+    return MARKET_TEST_DB_PATH if env == "test" else MARKET_DB_PATH
+
+
+def _backtest_path(env: str) -> Path | None:
+    _validate_env(env)
+    return BACKTEST_TEST_DB_PATH if env == "test" else BACKTEST_DB_PATH
+
+
+def _validate_env(env: str) -> str:
+    if env not in ("prod", "test"):
+        raise DataAccessError(f"未知环境：{env!r}")
+    return env
 
 
 class DataAccessError(RuntimeError):
@@ -107,9 +125,9 @@ def _resolve_run_id(con: duckdb.DuckDBPyConnection, requested: str) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_available_options() -> (
-    tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]
-):
+def get_available_options(
+    env: str = "prod",
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
     """返回 (策略列表, 基准列表, 因子列表)。
 
     单个库不可用时返回空列表，页面根据空列表给出提示，不直接崩。
@@ -119,7 +137,7 @@ def get_available_options() -> (
     factors: list[dict[str, str]] = []
 
     try:
-        with _connect(BACKTEST_DB_PATH) as con:
+        with _connect(_backtest_path(env)) as con:
             rows = con.execute(
                 """
                 SELECT run_id, strategy_id, coalesce(strategy_name, strategy_id),
@@ -149,7 +167,7 @@ def get_available_options() -> (
         logger.exception("读取 backtest.duckdb 选项失败: {}", exc)
 
     try:
-        with _connect(MARKET_DB_PATH) as con:
+        with _connect(_market_path(env)) as con:
             rows = con.execute(
                 """
                 SELECT factor_id, factor_name, coalesce(factor_group, ''),
@@ -176,10 +194,10 @@ def get_available_options() -> (
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_nav_data(strategy_id: str, baseline_id: str) -> pl.DataFrame:
+def get_nav_data(strategy_id: str, baseline_id: str, *, env: str = "prod") -> pl.DataFrame:
     """策略与基准的日频净值/收益，按 trade_date 对齐。"""
     try:
-        with _connect(BACKTEST_DB_PATH) as con:
+        with _connect(_backtest_path(env)) as con:
             run_id = _resolve_run_id(con, strategy_id)
             frame = _query_frame(
                 con,
@@ -218,13 +236,15 @@ def get_nav_data(strategy_id: str, baseline_id: str) -> pl.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_factor_data(factor_name: str, start_date: str, end_date: str) -> pl.DataFrame:
+def get_factor_data(
+    factor_name: str, start_date: str, end_date: str, *, env: str = "prod"
+) -> pl.DataFrame:
     """因子截面 + 下期收益（future return）。
 
     下期收益在 Polars 中按 ``ts_code`` 分组 shift(-1) 计算，保证向量化。
     """
     try:
-        with _connect(MARKET_DB_PATH) as con:
+        with _connect(_market_path(env)) as con:
             rows = con.execute(
                 "SELECT factor_id FROM meta_factor_registry WHERE factor_name = ?",
                 [factor_name],
@@ -286,10 +306,10 @@ def get_factor_data(factor_name: str, start_date: str, end_date: str) -> pl.Data
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_factor_date_range(factor_name: str) -> tuple[date, date] | None:
+def get_factor_date_range(factor_name: str, *, env: str = "prod") -> tuple[date, date] | None:
     """因子在库中的可用日期范围，供侧边栏设置默认值。"""
     try:
-        with _connect(MARKET_DB_PATH) as con:
+        with _connect(_market_path(env)) as con:
             rows = con.execute(
                 """
                 SELECT min(f.trade_date), max(f.trade_date)
@@ -308,18 +328,18 @@ def get_factor_date_range(factor_name: str) -> tuple[date, date] | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_data_status() -> dict[str, object]:
+def get_data_status(env: str = "prod") -> dict[str, object]:
     """首页用的轻量状态：各表行数与最新日期。"""
     status: dict[str, object] = {
-        "market_db": str(MARKET_DB_PATH or "未配置"),
-        "backtest_db": str(BACKTEST_DB_PATH or "未配置"),
+        "market_db": str(_market_path(env) or "未配置"),
+        "backtest_db": str(_backtest_path(env) or "未配置"),
         "backtest_rows": {},
         "factor_rows": 0,
         "latest_nav": None,
         "latest_baseline": None,
     }
     try:
-        with _connect(BACKTEST_DB_PATH) as con:
+        with _connect(_backtest_path(env)) as con:
             for table in ("bt_runs", "bt_nav", "bt_baselines", "bt_benchmarks"):
                 rows = con.execute(f'SELECT count(*) FROM "{table}"').fetchall()
                 status["backtest_rows"][table] = int(rows[0][0])  # type: ignore[index]
@@ -330,7 +350,7 @@ def get_data_status() -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("读取回测库状态失败: {}", exc)
     try:
-        with _connect(MARKET_DB_PATH) as con:
+        with _connect(_market_path(env)) as con:
             rows = con.execute("SELECT count(*) FROM fact_factor_daily").fetchall()
             status["factor_rows"] = int(rows[0][0]) if rows else 0
     except Exception as exc:  # noqa: BLE001
@@ -340,7 +360,9 @@ def get_data_status() -> dict[str, object]:
 
 __all__ = [
     "BACKTEST_DB_PATH",
+    "BACKTEST_TEST_DB_PATH",
     "MARKET_DB_PATH",
+    "MARKET_TEST_DB_PATH",
     "DataAccessError",
     "get_available_options",
     "get_data_status",
