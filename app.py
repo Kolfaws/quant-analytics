@@ -22,6 +22,8 @@ configure_logging()
 theme_caption()
 
 with st.sidebar:
+    env_label = st.radio("数据环境", ["正式", "测试"], horizontal=True, key="data_env")
+    env = "test" if env_label == "测试" else "prod"
     st.header("数据")
     if st.button("刷新数据", icon=":material/refresh:", width="stretch"):
         get_available_options.clear()
@@ -31,7 +33,7 @@ with st.sidebar:
 st.title("Quant Analytics")
 st.caption("策略、基准与因子分析")
 
-strategies, baselines, factors = get_available_options()
+strategies, baselines, factors = get_available_options(env=env)
 
 st.subheader("分析模块")
 st.page_link(

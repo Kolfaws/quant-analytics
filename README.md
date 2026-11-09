@@ -16,7 +16,7 @@
 
 | 页面 | 内容 |
 | --- | --- |
-| `app.py` | 首页：两个分析入口、数据刷新 |
+| `app.py` | 首页：两个分析入口、正式/测试环境切换、数据刷新 |
 | `pages/2_strategy_baseline.py` | 策略 vs 基准：策略/基准选择、超额与回撤开关、5 个 KPI、风险指标、刷新、HTML 导出 |
 | `pages/1_factor_analysis.py` | 因子深度：因子/日期/分组控制、IC 累积与换手率开关、6 个 KPI、分层收益、刷新、HTML 导出 |
 
@@ -118,6 +118,8 @@ Get-NetTCPConnection -LocalPort 8501 | Select-Object -ExpandProperty OwningProce
 ```env
 MARKET_DB_PATH=/absolute/path/to/market.duckdb
 BACKTEST_DB_PATH=/absolute/path/to/backtest.duckdb
+MARKET_TEST_DB_PATH=/absolute/path/to/market_test.duckdb
+BACKTEST_TEST_DB_PATH=/absolute/path/to/backtest_test.duckdb
 ```
 
 ## 5. 计算口径
@@ -174,7 +176,17 @@ make test
 - 分层收益与多空序列；
 - Top 组全换手 / 无换手场景。
 
-## 8. 数据前置条件
+## 8. 测试环境
+
+侧边栏“数据环境”可切换：
+
+- 正式：`MARKET_DB_PATH` / `BACKTEST_DB_PATH`；
+- 测试：`MARKET_TEST_DB_PATH` / `BACKTEST_TEST_DB_PATH`。
+
+查询缓存按环境分别缓存；切换后自动读取对应数据库，刷新按钮会清空相关缓存。
+测试库不存在时页面显示为空或错误提示，不影响正式环境。
+
+## 9. 数据前置条件
 
 - 策略页：`backtest.duckdb` 至少有 `status='success'` 的 `bt_runs`、对应的 `bt_nav`，
   以及 `bt_baselines`。
@@ -182,7 +194,7 @@ make test
   且 `fact_factor_daily` 有数据。
 - 若因子目录为空，因子页会给出提示而不是报错；首页会显示警告。
 
-## 9. 部署建议
+## 10. 部署建议
 
 - Streamlit Community Cloud / 内网服务器均可；
 - 生产环境建议把 `.streamlit/secrets.toml` 用于密钥（本项目已 gitignore）；

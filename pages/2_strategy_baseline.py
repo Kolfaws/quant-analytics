@@ -31,7 +31,10 @@ def _num(value: float | None, digits: int = 2) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
-strategies, baselines, _ = get_available_options()
+env_label = st.sidebar.radio("数据环境", ["正式", "测试"], horizontal=True, key="data_env")
+env = "test" if env_label == "测试" else "prod"
+
+strategies, baselines, _ = get_available_options(env=env)
 
 with st.sidebar:
     st.header("策略对比")
@@ -59,7 +62,7 @@ with st.sidebar:
 
 try:
     with st.spinner("加载数据…"):
-        raw = get_nav_data(strategy["run_id"], baseline["benchmark_id"])
+        raw = get_nav_data(strategy["run_id"], baseline["benchmark_id"], env=env)
         frame = calc_cumulative_returns(raw)
         frame = calc_drawdown(frame, "strategy_nav")
         metrics = calc_performance_metrics(frame)
