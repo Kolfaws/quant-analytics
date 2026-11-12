@@ -1,4 +1,4 @@
-"""因子深度分析页面。"""
+"""因子深度分析页面"""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ _, _, factors = get_available_options(env=env)
 with st.sidebar:
     st.header("因子分析")
     if not factors:
-        st.error("暂无可用因子数据。")
+        st.error("暂无可用因子数据")
         st.stop()
     factor = st.selectbox(
         "因子",
@@ -88,10 +88,10 @@ with st.sidebar:
         get_factor_date_range.clear()
         get_available_options.clear()
         st.rerun()
-    st.caption("查询缓存 1 小时；刷新后重新读取数据库。")
+    st.caption("查询缓存 1 小时；刷新后重新读取数据库")
 
 if start_date > end_date:
-    st.error("开始日期不能晚于结束日期。")
+    st.error("开始日期不能晚于结束日期")
     st.stop()
 
 try:
@@ -116,7 +116,7 @@ except Exception as exc:  # noqa: BLE001
     st.stop()
 
 if ic_df.is_empty():
-    st.warning("该区间没有可用的 IC。")
+    st.warning("该区间没有可用的 IC")
     st.stop()
 
 st.caption(f"{start_date} ~ {end_date} · {ic_df.height:,} 个交易日")
