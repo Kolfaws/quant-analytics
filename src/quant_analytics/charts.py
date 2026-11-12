@@ -366,8 +366,234 @@ def figure_to_html(fig: go.Figure, *, dark: bool = False, subtitle: str = "") ->
 </html>"""
 
 
+# ---------------------------------------------------------------------------
+# 新服务层页面用的批量/多 run 图
+# ---------------------------------------------------------------------------
+MAX_CHART_POINTS = 5000
+
+
+def _downsample(df: pl.DataFrame, max_points: int = MAX_CHART_POINTS) -> pl.DataFrame:
+    """按步长降采样，不逐行循环；保留首尾附近趋势。"""
+    if df.height <= max_points:
+        return df
+    step = max(1, int(df.height / max_points) + 1)
+    return (
+        df.with_row_index("_i")
+        .filter((pl.col("_i") % step == 0) | (pl.col("_i") == df.height - 1))
+        .drop("_i")
+    )
+
+
+def _scatter_line(
+    frame: pl.DataFrame,
+    *,
+    x: str,
+    y: str,
+    name: str,
+    color: str,
+    width: float = 1.8,
+    dash: str | None = None,
+    max_points: int = MAX_CHART_POINTS,
+) -> go.Scattergl:
+    data = _downsample(frame.select(x, y).drop_nulls(), max_points).to_pandas()
+    return go.Scattergl(
+        x=data[x],
+        y=data[y],
+        name=name,
+        mode="lines",
+        line=dict(color=color, width=width, dash=dash),
+    )
+
+
+def strategy_benchmark_nav_chart(
+    nav: pl.DataFrame,
+    *,
+    excess: pl.DataFrame | None = None,
+    benchmark_lines: pl.DataFrame | None = None,
+    dark: bool = False,
+) -> go.Figure:
+    """主策略 + 主基准 + 可选超额 + 可选对比基准线。"""
+    fig = go.Figure()
+    if "strategy_nav" in nav.columns:
+        fig.add_trace(
+            _scatter_line(
+                nav,
+                x="trade_date",
+                y="strategy_nav",
+                name="策略",
+                color=_COLORS["strategy"],
+                width=2.2,
+            )
+        )
+    if "benchmark_nav" in nav.columns:
+        fig.add_trace(
+            _scatter_line(
+                nav,
+                x="trade_date",
+                y="benchmark_nav",
+                name="主基准",
+                color=_COLORS["baseline"],
+                width=1.8,
+                dash="dot",
+            )
+        )
+    if excess is not None and not excess.is_empty():
+        data = _downsample(excess.select("trade_date", "excess_nav").drop_nulls()).to_pandas()
+        fig.add_trace(
+            go.Scattergl(
+                x=data["trade_date"],
+                y=data["excess_nav"],
+                name="超额（策略/主基准）",
+                mode="lines",
+                line=dict(color=_COLORS["excess"], width=1.5),
+                yaxis="y2",
+            )
+        )
+        fig.update_layout(
+            yaxis2=dict(title="超额净值", overlaying="y", side="right", showgrid=False)
+        )
+    if benchmark_lines is not None and not benchmark_lines.is_empty():
+        for row in benchmark_lines["benchmark_id"].unique(maintain_order=True).to_list():
+            part = benchmark_lines.filter(pl.col("benchmark_id") == row)
+            label = str(part["name"][0]) if "name" in part.columns else str(row)
+            fig.add_trace(
+                _scatter_line(
+                    part,
+                    x="trade_date",
+                    y="nav",
+                    name=f"对比 · {label}",
+                    color=_COLORS["turnover"],
+                    width=1.0,
+                    dash="dash",
+                )
+            )
+    fig.add_hline(y=1.0, line_dash="dash", line_color=_palette(dark)["zero"], line_width=1)
+    return _layout(fig, title="策略、基准与对比基准", y_title="归一净值", dark=dark)
+
+
+def drawdown_chart(drawdown_frame: pl.DataFrame, *, dark: bool = False) -> go.Figure:
+    """策略/基准回撤；缺失基准时只画策略。"""
+    fig = go.Figure()
+    fig.add_trace(
+        _scatter_line(
+            drawdown_frame,
+            x="trade_date",
+            y="drawdown",
+            name="策略回撤",
+            color=_COLORS["long_short"],
+            width=1.5,
+        )
+    )
+    if "benchmark_drawdown" in drawdown_frame.columns:
+        fig.add_trace(
+            _scatter_line(
+                drawdown_frame,
+                x="trade_date",
+                y="benchmark_drawdown",
+                name="基准回撤",
+                color=_COLORS["baseline"],
+                width=1.2,
+                dash="dot",
+            )
+        )
+    fig.update_yaxes(tickformat=".0%")
+    return _layout(fig, title="回撤", y_title="回撤", dark=dark)
+
+
+def rank_ic_cum_chart(ic_cum: pl.DataFrame, *, dark: bool = False) -> go.Figure:
+    """RankIC 累积曲线；空表显示空图。"""
+    fig = go.Figure()
+    if not ic_cum.is_empty():
+        fig.add_trace(
+            _scatter_line(
+                ic_cum,
+                x="trade_date",
+                y="rank_ic_cum",
+                name="RankIC 累积",
+                color=_COLORS["strategy"],
+                width=2.0,
+            )
+        )
+    fig.add_hline(y=0.0, line_dash="dash", line_color=_palette(dark)["zero"])
+    return _layout(fig, title="RankIC 累积", y_title="累积 RankIC", dark=dark)
+
+
+def multi_run_nav_chart(
+    nav_wide: pl.DataFrame,
+    *,
+    dark: bool = False,
+    title: str = "多 run 归一净值",
+    y_title: str = "净值",
+) -> go.Figure:
+    """多 run 归一净值；第一列为 trade_date，其余列是 run_id。"""
+    fig = go.Figure()
+    columns = [name for name in nav_wide.columns if name != "trade_date"]
+    per_trace = max(200, MAX_CHART_POINTS // max(1, len(columns)))
+    for index, column in enumerate(columns):
+        fig.add_trace(
+            _scatter_line(
+                nav_wide,
+                x="trade_date",
+                y=column,
+                name=str(column),
+                color=f"hsl({210 - 24 * index}, 70%, {'62%' if dark else '45%'})",
+                width=1.8,
+                max_points=per_trace,
+            )
+        )
+    fig.add_hline(y=1.0, line_dash="dash", line_color=_palette(dark)["zero"])
+    return _layout(fig, title=title, y_title=y_title, dark=dark)
+
+
+def multi_run_drawdown_chart(drawdown_wide: pl.DataFrame, *, dark: bool = False) -> go.Figure:
+    """多 run 回撤。"""
+    fig = go.Figure()
+    columns = [name for name in drawdown_wide.columns if name != "trade_date"]
+    per_trace = max(200, MAX_CHART_POINTS // max(1, len(columns)))
+    for index, column in enumerate(columns):
+        fig.add_trace(
+            _scatter_line(
+                drawdown_wide,
+                x="trade_date",
+                y=column,
+                name=str(column),
+                color=f"hsl({8 + 24 * index}, 70%, {'62%' if dark else '45%'})",
+                width=1.4,
+                max_points=per_trace,
+            )
+        )
+    fig.update_yaxes(tickformat=".0%")
+    return _layout(fig, title="多 run 回撤", y_title="回撤", dark=dark)
+
+
+def rank_ic_comparison_chart(ic_df: pl.DataFrame, *, dark: bool = False) -> go.Figure:
+    """多 run 的平均 RankIC 对比条形图。"""
+    fig = go.Figure()
+    if not ic_df.is_empty():
+        summary = (
+            ic_df.group_by("run_id")
+            .agg(pl.col("rank_ic").mean().alias("rank_ic_mean"))
+            .sort("run_id")
+        )
+        data = summary.to_pandas()
+        fig.add_trace(
+            go.Bar(
+                x=data["run_id"],
+                y=data["rank_ic_mean"],
+                name="平均 RankIC",
+                marker_color=_COLORS["strategy"],
+            )
+        )
+    fig.add_hline(y=0.0, line_color=_palette(dark)["zero"], line_width=1)
+    return _layout(fig, title="平均 RankIC 对比", y_title="RankIC", dark=dark)
+
+
 __all__ = [
+    "MAX_CHART_POINTS",
+    "drawdown_chart",
     "figure_to_html",
+    "multi_run_drawdown_chart",
+    "multi_run_nav_chart",
     "plot_cumulative_ic",
     "plot_drawdown",
     "plot_equity_curves",
@@ -376,4 +602,7 @@ __all__ = [
     "plot_ic_distribution",
     "plot_long_short",
     "plot_turnover",
+    "rank_ic_comparison_chart",
+    "rank_ic_cum_chart",
+    "strategy_benchmark_nav_chart",
 ]

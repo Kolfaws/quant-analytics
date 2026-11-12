@@ -50,6 +50,13 @@ st.page_link(
 )
 st.caption("IC、分层收益、多空组合与换手率。")
 
+st.page_link(
+    "pages/3_factor_strategy.py",
+    label="因子策略对比",
+    icon=":material/compare_arrows:",
+)
+st.caption("按因子/模型比较多 run 的净值、回撤、RankIC 与 KPI。")
+
 if not strategies or not baselines:
     st.warning("暂无可用的策略与基准数据。")
 if not factors:

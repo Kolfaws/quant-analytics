@@ -389,8 +389,189 @@ def calc_return_statistics(returns: pl.Series) -> dict[str, float | None]:
     return _series_metrics(returns)
 
 
+# ---------------------------------------------------------------------------
+# 新服务层使用的显式纯函数
+# ---------------------------------------------------------------------------
+def cum_nav(
+    df: pl.DataFrame,
+    *,
+    ret_col: str = "ret_1d",
+    out_col: str = "cum_nav",
+) -> pl.DataFrame:
+    """由日收益生成累计净值；首日按 1+r 起算。"""
+    if ret_col not in df.columns:
+        raise ValueError(f"缺少收益列：{ret_col}")
+    return df.sort("trade_date").with_columns(
+        (1.0 + pl.col(ret_col).cast(pl.Float64)).cum_prod().alias(out_col)
+    )
+
+
+def excess_nav(
+    df: pl.DataFrame,
+    *,
+    strategy_col: str = "strategy_nav",
+    benchmark_col: str = "benchmark_nav",
+    out_col: str = "excess_nav",
+) -> pl.DataFrame:
+    """策略/基准归一净值之比；两列分别以首日为 1。"""
+    for column in ("trade_date", strategy_col, benchmark_col):
+        if column not in df.columns:
+            raise ValueError(f"缺少列：{column}")
+    ordered = df.sort("trade_date")
+    return ordered.with_columns(
+        (
+            pl.col(strategy_col)
+            / pl.col(strategy_col).first()
+            / (pl.col(benchmark_col) / pl.col(benchmark_col).first())
+        ).alias(out_col)
+    )
+
+
+def drawdown(
+    df: pl.DataFrame,
+    *,
+    nav_col: str = "nav",
+    out_col: str = "drawdown",
+) -> pl.DataFrame:
+    """按历史最高净值计算回撤（≤0）。"""
+    if nav_col not in df.columns:
+        raise ValueError(f"缺少净值列：{nav_col}")
+    return df.sort("trade_date").with_columns(
+        (pl.col(nav_col) / pl.col(nav_col).cum_max() - 1.0).alias(out_col)
+    )
+
+
+def annual_return(returns: pl.Series) -> float | None:
+    """几何年化收益；空输入返回 None。"""
+    series = _clean(returns)
+    if series.is_empty():
+        return None
+    gross = _to_float((1.0 + series).product())
+    if gross <= 0:
+        return None
+    return gross ** (TRADING_DAYS / series.len()) - 1.0
+
+
+def annual_vol(returns: pl.Series) -> float | None:
+    """年化样本波动率；少于 2 个有效值返回 None。"""
+    series = _clean(returns)
+    if series.len() < 2:
+        return None
+    return _to_float(series.std(ddof=1)) * math.sqrt(TRADING_DAYS)
+
+
+def sharpe(returns: pl.Series) -> float | None:
+    """无风险利率为 0 的年化 Sharpe。"""
+    series = _clean(returns)
+    if series.len() < 2:
+        return None
+    std = _to_float(series.std(ddof=1))
+    if std <= 0:
+        return None
+    return _to_float(series.mean()) / std * math.sqrt(TRADING_DAYS)
+
+
+def max_drawdown(nav: pl.Series) -> float | None:
+    """净值序列最大回撤；空输入返回 None。"""
+    series = _clean(nav)
+    if series.is_empty():
+        return None
+    values = series / series.cum_max() - 1.0
+    return _to_float(values.min())
+
+
+def calmar(returns: pl.Series) -> float | None:
+    """年化收益 / |最大回撤|；无回撤或空输入返回 None。"""
+    annual = annual_return(returns)
+    nav = (1.0 + _clean(returns)).cum_prod()
+    max_dd = max_drawdown(nav)
+    if annual is None or max_dd is None or max_dd >= 0:
+        return None
+    return annual / abs(max_dd)
+
+
+def win_rate(returns: pl.Series) -> float | None:
+    """正收益天数 / 有效天数；空输入返回 None。"""
+    series = _clean(returns)
+    if series.is_empty():
+        return None
+    return _to_float((series > 0).mean())
+
+
+def tracking_error(active_returns: pl.Series) -> float | None:
+    """主动收益的年化标准差。"""
+    return annual_vol(active_returns)
+
+
+def information_ratio(active_returns: pl.Series) -> float | None:
+    """年化主动收益 / 年化跟踪误差。"""
+    annual = annual_return(active_returns)
+    vol = annual_vol(active_returns)
+    if annual is None or vol is None or vol <= 0:
+        return None
+    return annual / vol
+
+
+def beta(strategy_returns: pl.Series, benchmark_returns: pl.Series) -> float | None:
+    """策略对基准的 OLS beta；基准方差为 0 返回 None。"""
+    frame = pl.DataFrame(
+        {
+            "strategy": strategy_returns.cast(pl.Float64),
+            "benchmark": benchmark_returns.cast(pl.Float64),
+        }
+    ).drop_nulls()
+    frame = frame.filter(pl.col("strategy").is_finite() & pl.col("benchmark").is_finite())
+    if frame.height < 2:
+        return None
+    strategy = frame["strategy"].to_numpy()
+    benchmark = frame["benchmark"].to_numpy()
+    variance = float(np.var(benchmark, ddof=1))
+    if variance == 0:
+        return None
+    covariance = float(np.cov(strategy, benchmark, ddof=1)[0, 1])
+    return covariance / variance
+
+
+def rank_ic_summary(
+    df: pl.DataFrame,
+    *,
+    rank_ic_col: str = "rank_ic",
+) -> dict[str, float | None]:
+    """RankIC 均值 / 标准差 / ICIR / 胜率 / 天数；空输入返回 N/A。"""
+    if df.is_empty() or rank_ic_col not in df.columns:
+        return {
+            "rank_ic_mean": None,
+            "rank_ic_std": None,
+            "rank_icir": None,
+            "rank_ic_win_rate": None,
+            "n_days": 0,
+        }
+    series = _clean(df[rank_ic_col])
+    if series.is_empty():
+        return {
+            "rank_ic_mean": None,
+            "rank_ic_std": None,
+            "rank_icir": None,
+            "rank_ic_win_rate": None,
+            "n_days": 0,
+        }
+    mean = _to_float(series.mean())
+    std = _to_float(series.std(ddof=1)) if series.len() > 1 else None
+    icir = mean / std if std is not None and std > 0 else None
+    return {
+        "rank_ic_mean": mean,
+        "rank_ic_std": std,
+        "rank_icir": icir,
+        "rank_ic_win_rate": _to_float((series > 0).mean()),
+        "n_days": series.len(),
+    }
+
+
 __all__ = [
     "TRADING_DAYS",
+    "annual_return",
+    "annual_vol",
+    "beta",
     "calc_cumulative_returns",
     "calc_daily_ic",
     "calc_drawdown",
@@ -399,4 +580,14 @@ __all__ = [
     "calc_quantile_returns",
     "calc_return_statistics",
     "calc_turnover",
+    "calmar",
+    "cum_nav",
+    "drawdown",
+    "excess_nav",
+    "information_ratio",
+    "max_drawdown",
+    "rank_ic_summary",
+    "sharpe",
+    "tracking_error",
+    "win_rate",
 ]

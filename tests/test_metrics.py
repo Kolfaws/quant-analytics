@@ -8,6 +8,9 @@ import polars as pl
 import pytest
 
 from quant_analytics.metrics import (
+    annual_return,
+    annual_vol,
+    beta,
     calc_cumulative_returns,
     calc_daily_ic,
     calc_drawdown,
@@ -15,6 +18,16 @@ from quant_analytics.metrics import (
     calc_performance_metrics,
     calc_quantile_returns,
     calc_turnover,
+    calmar,
+    cum_nav,
+    drawdown,
+    excess_nav,
+    information_ratio,
+    max_drawdown,
+    rank_ic_summary,
+    sharpe,
+    tracking_error,
+    win_rate,
 )
 
 
@@ -114,3 +127,65 @@ def test_metrics_is_vectorized_on_empty() -> None:
     assert calc_daily_ic(empty).is_empty()
     assert calc_quantile_returns(empty).is_empty()
     assert calc_turnover(empty).is_empty()
+
+
+def test_new_nav_and_scalar_metrics() -> None:
+    returns = pl.Series("ret_1d", [0.01, -0.02, 0.03, 0.0])
+    frame = pl.DataFrame({"trade_date": [date(2024, 1, 2 + i) for i in range(4)]}).with_columns(
+        returns.alias("ret_1d")
+    )
+    nav = cum_nav(frame)
+    assert nav["cum_nav"].to_list() == pytest.approx([1.01, 0.9898, 1.019494, 1.019494])
+    assert annual_return(returns) is not None
+    assert annual_vol(returns) is not None
+    assert sharpe(returns) is not None
+    assert max_drawdown(nav["cum_nav"]) == pytest.approx(0.9898 / 1.01 - 1.0)
+    assert calmar(returns) is not None
+    assert win_rate(returns) == pytest.approx(0.5)
+    assert information_ratio(returns) is not None
+    assert tracking_error(returns) == pytest.approx(annual_vol(returns))
+
+
+def test_excess_nav_and_drawdown_alignment() -> None:
+    frame = pl.DataFrame(
+        {
+            "trade_date": [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)],
+            "strategy_nav": [1.0, 1.1, 1.2],
+            "benchmark_nav": [1.0, 1.05, 1.08],
+        }
+    )
+    result = excess_nav(frame)
+    assert result["excess_nav"].to_list() == pytest.approx([1.0, 1.1 / 1.05, 1.2 / 1.08])
+    with_dd = drawdown(frame, nav_col="strategy_nav")
+    assert with_dd["drawdown"].to_list() == pytest.approx([0.0, 0.0, 0.0])
+
+
+def test_metrics_empty_single_and_zero_variance() -> None:
+    empty = pl.Series("ret", [], dtype=pl.Float64)
+    assert annual_return(empty) is None
+    assert annual_vol(empty) is None
+    assert sharpe(empty) is None
+    assert max_drawdown(empty) is None
+    assert calmar(empty) is None
+    assert win_rate(empty) is None
+    assert information_ratio(empty) is None
+    assert beta(empty, empty) is None
+
+    one = pl.Series("ret", [0.01])
+    assert annual_vol(one) is None
+    assert sharpe(one) is None
+    assert annual_return(one) == pytest.approx(1.01**252 - 1.0)
+
+    zero = pl.Series("ret", [0.0, 0.0, 0.0])
+    assert sharpe(zero) is None
+    assert beta(zero, zero) is None
+
+
+def test_rank_ic_summary_and_empty() -> None:
+    ic = pl.DataFrame({"rank_ic": [0.1, -0.05, 0.2]})
+    summary = rank_ic_summary(ic)
+    assert summary["rank_ic_mean"] == pytest.approx(0.25 / 3)
+    assert summary["rank_ic_win_rate"] == pytest.approx(2 / 3)
+    assert summary["n_days"] == 3
+    empty = pl.DataFrame(schema={"rank_ic": pl.Float64()})
+    assert rank_ic_summary(empty)["n_days"] == 0
