@@ -1,5 +1,11 @@
 # quant-analytics
 
+## Overview
+
+Quant Analytics is a read-only Streamlit dashboard for exploring factor IC, portfolio performance, benchmarks, and backtest results.
+It reads DuckDB snapshots through cached repository and service layers, then renders interactive charts and exportable HTML snapshots.
+The project is intended for research review, not for live trading or database writes.
+
 量化分析看板（Streamlit）：只读展示回测、基准与因子研究结果。
 
 - 项目/文件夹：`quant-analytics`
