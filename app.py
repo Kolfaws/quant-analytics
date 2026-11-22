@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from quant_analytics.db import get_available_options
+from quant_analytics.db import db_cache_token, get_available_options
 from quant_analytics.logging_utils import configure_logging
 from quant_analytics.theme import theme_caption
 
@@ -33,7 +33,9 @@ with st.sidebar:
 st.title("Quant Analytics")
 st.caption("策略、基准与因子分析")
 
-strategies, baselines, factors = get_available_options(env=env)
+strategies, baselines, factors = get_available_options(
+    env=env, cache_token=db_cache_token(env) ^ db_cache_token(env, "backtest")
+)
 
 st.subheader("分析模块")
 st.page_link(
