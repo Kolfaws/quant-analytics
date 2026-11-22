@@ -95,14 +95,19 @@ def _fallback_kpis(nav: pl.DataFrame) -> dict[str, float | None]:
             if not aligned.is_empty()
             else pl.Series("active", [], dtype=pl.Float64)
         )
+        benchmark_len = len(nav["benchmark_nav"])
+        excess_total = (
+            float(nav["strategy_nav"][-1] / nav["benchmark_nav"][-1] - 1.0)
+            if benchmark_len
+            else None
+        )
+        excess_annualized = None
+        if excess_total is not None and 1.0 + excess_total > 0 and nav.height > 0:
+            excess_annualized = (1.0 + excess_total) ** (252.0 / nav.height) - 1.0
         metrics.update(
             {
-                "excess_total_return": (
-                    float(nav["strategy_nav"][-1] / nav["benchmark_nav"][-1] - 1.0)
-                    if nav["benchmark_nav"].len()
-                    else None
-                ),
-                "excess_annualized_return": annual_return(active),
+                "excess_total_return": excess_total,
+                "excess_annualized_return": excess_annualized,
                 "tracking_error": tracking_error(active),
                 "information_ratio": information_ratio(active),
                 "beta": beta(aligned["strategy_ret"], aligned["benchmark_ret"])

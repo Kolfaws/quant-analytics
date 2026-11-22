@@ -23,4 +23,4 @@ gatherUsageStats = false
 
 [client]
 toolbarMode = "viewer"
-showErrorDetails = true
+showErrorDetails = false

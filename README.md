@@ -1,22 +1,18 @@
 # quant-analytics
 
-## Overview
-
-Quant Analytics is a read-only Streamlit dashboard for exploring factor IC, portfolio performance, benchmarks, and backtest results.
-It reads DuckDB snapshots through cached repository and service layers, then renders interactive charts and exportable HTML snapshots.
-The project is intended for research review, not for live trading or database writes.
-
 量化分析看板（Streamlit）：只读展示回测、基准与因子研究结果。
 
 - 项目/文件夹：`quant-analytics`
 - 技术栈：Python 3.13 / Streamlit / Plotly / Polars / DuckDB / Numpy
 - 数据源：
   - `${BACKTEST_DB_PATH}`：`bt_runs`、`bt_nav`、`bt_run_metrics`、`bt_benchmarks`、`bt_baselines`、`v_bt_nav_excess`
-  - `${MARKET_DB_PATH}`：`fact_factor_daily`、`fact_daily`、`meta_factor_registry`
+  - `${MARKET_DB_PATH}`：`fact_factor_daily`、`v_daily_return`、`fact_tradable_flag`、`meta_factor_registry`、`dim_trade_cal`
 
 > 纯展示端：不包含回测、因子计算或数据库写入逻辑。
 > 所有 DuckDB 连接都是 `read_only=True`，不会锁定数据库；查询结果用
-> `st.cache_data(ttl=3600)` 缓存，key 包含环境、db mtime 和本页 refresh_token。
+> `st.cache_data(ttl=3600)` 缓存。backtest repository 的 key 含 env、db mtime
+> 和 refresh_token；`db.py` 的因子/目录查询 key 也含 env 与库文件 mtime
+> （`cache_token`），刷新按钮会清对应缓存。
 
 ## 1. 页面
 
@@ -153,23 +149,29 @@ BACKTEST_TEST_DB_PATH=/absolute/path/to/backtest_test.duckdb
 - `bt_nav.ret_1d` 与 `bt_baselines.ret_1d` 按 `trade_date` 内连接；
 - 累计净值：`nav / first(nav)`；
 - 超额净值：`strategy_cum / baseline_cum`；
+- 多 run 页（3）的超额：策略与主基准各自以**所选窗口内首个共同交易日**为 1 重新归一，超额起点恒为 1，不随基准自身 `base_date` 漂移；
+- 多 run 页（3）的 KPI 与所选日期窗/主基准一致：窗口收窄时按窗口重算，`bt_run_metrics` 只在窗口完整覆盖 run 区间时复用；数据不足的指标置空（`N/A`）并在页面 notes 标注；
 - 绩效：年化收益、年化波动、Sharpe、Calmar、胜率、最大回撤、跟踪误差、IR、Beta；
 - 年化按 252 个交易日；
 - 主基准与对比基准分离：对比 benchmark 只画展示线，不参与主 KPI 的超额/IR/Beta。
 
 ### RankIC
 
-- 只读已存结果：优先日度 RankIC 表，其次 `bt_run_metrics` 中的 `rank_ic_*` 汇总；都没有时显示 `N/A`，不在页面现场重算；
-- 多 run 页面按 run 计算独立 RankIC 均值，不把不同 run 的净值填充后混算。
+- 策略页（2/3）只读已存结果：优先日度 RankIC 表，其次 `bt_run_metrics` 中的 `rank_ic_*` 汇总；都没有时显示 `N/A`，不在页面现场重算；
+- 多 run 页面（3）按 run 聚合独立 RankIC 均值，不把不同 run 的净值填充后混算；
+- 因子页（1）按下方公式现场计算 Pearson IC / Rank IC。
 
 ### 因子
 
-- 因子值：`fact_factor_daily.value`
-- 下期收益：按 `ts_code` 分组的 `close.shift(-1) / close - 1`（在 Polars 中）
-- Pearson IC / Rank IC：按 `trade_date` 分组，`pl.corr`
-- 分层：按日对因子值降序 rank，切成 N 组，G1 = 因子值最高
-- 多空：`G1 - 最低组`；仅多头：`G1`
-- 换手率：`1 - 与上一交易日 Top 组交集 / Top 组数量`
+- 默认区间从 2010-01-01 开始（`pages/1_factor_analysis.py: DEFAULT_START_DATE`），不再硬编码 2015；
+- 因子值：`fact_factor_daily.value`；读 `meta_factor_registry.direction`，`direction=-1`（负向）时对因子值取反，IC/分层 G1 按正向口径展示，并在页面标注方向；
+- 下期收益：`v_daily_return.ret_1d`（`pct_chg/100`）取**下一交易日**的值；不使用未复权 `close.shift(-1)/close-1`，拆股/分红日不会产生假收益；
+- 停牌/缺行：下一交易日没有收益行时该样本剔除并计数，多日收益不会被当成一日收益；
+- 可交易过滤：样本 join `fact_tradable_flag`，信号日必须 `in_universe=TRUE` 且 `is_buyable=TRUE`；剔除行数按原因在页面显示，不静默丢弃；`is_sellable`（卖出侧）不并入买入过滤，保留在结果列中供卖出侧另算；
+- Pearson IC / Rank IC：按 `trade_date` 分组，`pl.corr`；
+- 分层：按日对因子值降序 rank，切成 N 组，G1 = 因子值最高（负向因子已取反）；
+- 多空：`G1 - 最低组`；仅多头：`G1`；
+- 换手率：`1 - 与上一交易日 Top 组交集 / Top 组数量`。
 
 ## 6. 性能与缓存
 
@@ -204,6 +206,8 @@ make test
 
 - 累计净值 / 超额 / 回撤；
 - 年化、Sharpe、Calmar、Beta、IR；
+- 多 run 页不同结束日的超额起点与 KPI 窗口一致性、短 run/末尾缺失不崩；
+- 因子页 DB 级测试（`tmp_path`）：拆股日下期收益与 `pct_chg` 对齐、停牌/缺行剔除、`in_universe`/`is_buyable` 过滤计数、负向 `direction` 取反；
 - 完美单调因子的 Pearson IC / Rank IC；
 - 分层收益与多空序列；
 - Top 组全换手 / 无换手场景；
@@ -227,7 +231,9 @@ make test
 - 策略页：`backtest.duckdb` 至少有 `status='success'` 的 `bt_runs`、对应的 `bt_nav`，
   以及 `bt_baselines`。
 - 因子页：`market.duckdb` 的 `meta_factor_registry` 有 `is_active=TRUE` 的因子，
-  且 `fact_factor_daily` 有数据。
+  且 `fact_factor_daily` 有数据；同时需要 `v_daily_return`（schema >= 1.3.0）、
+  `fact_tradable_flag`（已派生）与 `dim_trade_cal`，否则页面显式报错而不是用
+  未复权收益或不过滤可交易性来凑结果。
 - 若因子目录为空，因子页会给出提示而不是报错；首页会显示警告。
 
 ## 10. 部署建议
@@ -236,9 +242,4 @@ make test
 - 生产环境建议把 `.streamlit/secrets.toml` 用于密钥（本项目已 gitignore）；
 - 项目本身不写数据库，可安全地将 `<data-root>` 以只读方式挂载/共享。
 
-**EXIT**:
-Ctrl + C 退出 Streamlit 服务，关闭浏览器标签页不会停止服务。
-
-```powershell
-Get-NetTCPConnection -LocalPort 8501 | Select-Object -ExpandProperty OwningProcess | Stop-Process
-```
+退出方式（Ctrl + C 或按端口结束进程）见 §4。

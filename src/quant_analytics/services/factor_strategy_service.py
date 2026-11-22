@@ -68,6 +68,41 @@ def _metric_or_none(raw: dict[str, float | None], name: str) -> float | None:
     return metric_value(raw, name)
 
 
+def _last_value(series: pl.Series) -> float | None:
+    """末值：先 ``drop_nulls()`` 再 ``last()``；短 run / 末尾缺失不崩。"""
+    cleaned = series.drop_nulls()
+    if cleaned.is_empty():
+        return None
+    return float(cleaned.last())
+
+
+def _stored_kpis_usable(
+    run: dict[str, Any],
+    start: date | None,
+    end: date | None,
+) -> bool:
+    """已存 ``bt_run_metrics`` 是否与所选窗口一致。
+
+    只有所选窗口完整覆盖 run 区间时才可直接复用已存的策略侧指标；窗口被
+    收窄时必须按窗口重算，避免把全区间旧指标贴到子窗口上。超额/跟踪误差/
+    IR 始终按所选主基准在窗口内重算，不读已存值。
+    """
+    run_start = run.get("start_date")
+    run_end = run.get("end_date")
+    if not isinstance(run_start, date) or not isinstance(run_end, date):
+        return False
+    if start is not None and run_start < start:
+        return False
+    return not (end is not None and run_end > end)
+
+
+def _kpi_missing_note(missing: dict[str, list[str]]) -> str | None:
+    if not missing:
+        return None
+    detail = "；".join(f"{name}=[{', '.join(run_ids)}]" for name, run_ids in missing.items())
+    return f"KPI 缺失置空（窗口内数据不足或无基准交集）：{detail}"
+
+
 def _filter_runs(
     runs: pl.DataFrame,
     factor_ids: tuple[str, ...],
@@ -108,7 +143,10 @@ def build_factor_strategy_comparison(
     nav_long = get_nav_by_runs(env, run_ids, start, end, refresh_token=refresh_token)
     if nav_long.is_empty():
         raise DataAccessError("筛选的 run 在日期区间内没有净值")
-    nav_long = nav_long.with_columns(
+    nav_long = nav_long.filter(pl.col("nav").is_not_null() & pl.col("nav").is_finite())
+    if nav_long.is_empty():
+        raise DataAccessError("筛选的 run 在日期区间内没有有效净值")
+    nav_long = nav_long.sort(["run_id", "trade_date"]).with_columns(
         (pl.col("nav") / pl.col("nav").first().over("run_id")).alias("nav")
     )
     nav_wide = nav_long.pivot(index="trade_date", on="run_id", values="nav").sort("trade_date")
@@ -124,6 +162,10 @@ def build_factor_strategy_comparison(
     benchmark_nav = get_benchmark_nav(
         env, (benchmark_id,) if benchmark_id else (), start, end, refresh_token=refresh_token
     )
+    if not benchmark_nav.is_empty():
+        benchmark_nav = benchmark_nav.filter(
+            pl.col("nav").is_not_null() & pl.col("nav").is_finite()
+        )
     benchmark_defs = get_benchmark_defs(env, refresh_token=refresh_token)
     benchmark_meta = (
         benchmark_defs.filter(pl.col("benchmark_id") == benchmark_id)
@@ -132,60 +174,111 @@ def build_factor_strategy_comparison(
     )
 
     excess_wide = pl.DataFrame(schema={"trade_date": pl.Date()})
+    excess_aligned = pl.DataFrame(
+        schema={"run_id": pl.Utf8(), "trade_date": pl.Date(), "excess_nav": pl.Float64()}
+    )
     if benchmark_id and not benchmark_nav.is_empty():
         bench = benchmark_nav.select("trade_date", pl.col("nav").alias("benchmark_nav"))
-        excess_long = (
+        excess_aligned = (
             nav_long.select("run_id", "trade_date", "nav")
             .join(bench, on="trade_date", how="inner")
-            .with_columns((pl.col("nav") / pl.col("benchmark_nav")).alias("excess_nav"))
+            .sort(["run_id", "trade_date"])
         )
-        if excess_long.is_empty():
-            notes.append(f"基准 {benchmark_id} 与所选 run 没有共同日期")
+        if excess_aligned.is_empty():
+            notes.append(f"基准 {benchmark_id} 与所选 run 没有共同日期，超额为 N/A")
         else:
-            excess_wide = excess_long.pivot(
+            # 策略与基准各自以「窗口内首个共同交易日」为 1 重新归一，
+            # 超额起点恒为 1，不受基准自身 base_date 影响。
+            excess_aligned = excess_aligned.with_columns(
+                (
+                    pl.col("nav")
+                    / pl.col("nav").first().over("run_id")
+                    / (pl.col("benchmark_nav") / pl.col("benchmark_nav").first().over("run_id"))
+                ).alias("excess_nav")
+            )
+            excess_wide = excess_aligned.pivot(
                 index="trade_date", on="run_id", values="excess_nav"
             ).sort("trade_date")
+            notes.append(f"超额：策略与主基准 {benchmark_id} 在窗口首个共同交易日归一为 1")
     elif benchmark_id:
         notes.append(f"主基准 {benchmark_id} 无数据，超额为 N/A")
     else:
         notes.append("未选择基准，超额列为 N/A")
 
+    benchmark_returns = (
+        benchmark_nav.select("trade_date", pl.col("ret_1d").alias("benchmark_ret"))
+        if not benchmark_nav.is_empty() and "ret_1d" in benchmark_nav.columns
+        else pl.DataFrame(schema={"trade_date": pl.Date(), "benchmark_ret": pl.Float64()})
+    )
+
+    kpi_names = (
+        "total_return",
+        "annualized_return",
+        "sharpe_ratio",
+        "max_drawdown",
+        "win_rate",
+        "excess_total_return",
+        "tracking_error",
+        "information_ratio",
+    )
     rows: list[dict[str, Any]] = []
+    missing_kpi: dict[str, list[str]] = {}
+    stored_used = False
+    window_recomputed: list[str] = []
     for run in selected.iter_rows(named=True):
         run_id = str(run["run_id"])
         own = nav_long.filter(pl.col("run_id") == run_id).sort("trade_date")
-        returns = own["ret_1d"].drop_nulls()
-        raw = _wide_metrics(metrics_wide, run_id)
-        annual_metric = _metric_or_none(raw, "annualized_return")
-        sharpe_metric = _metric_or_none(raw, "sharpe_ratio")
-        dd_metric = _metric_or_none(raw, "max_drawdown")
-        win_metric = _metric_or_none(raw, "win_rate")
-        kpi = {
-            "total_return": (float(own["nav"][-1] - 1.0) if not own.is_empty() else None),
-            "annualized_return": (
-                annual_metric if annual_metric is not None else annual_return(returns)
-            ),
-            "sharpe_ratio": (sharpe_metric if sharpe_metric is not None else sharpe(returns)),
-            "max_drawdown": (dd_metric if dd_metric is not None else max_drawdown(own["nav"])),
-            "win_rate": (win_metric if win_metric is not None else win_rate(returns)),
+        returns = (
+            own["ret_1d"].drop_nulls()
+            if "ret_1d" in own.columns
+            else pl.Series("ret_1d", [], dtype=pl.Float64)
+        )
+        nav_last = _last_value(own["nav"])
+        kpi: dict[str, float | None] = {
+            "total_return": None if nav_last is None else nav_last - 1.0,
+            "annualized_return": annual_return(returns),
+            "sharpe_ratio": sharpe(returns),
+            "max_drawdown": max_drawdown(own["nav"]),
+            "win_rate": win_rate(returns),
         }
+
+        raw = _wide_metrics(metrics_wide, run_id)
+        if raw and _stored_kpis_usable(run, start, end):
+            for name in ("annualized_return", "sharpe_ratio", "max_drawdown", "win_rate"):
+                value = _metric_or_none(raw, name)
+                if value is not None:
+                    kpi[name] = value
+                    stored_used = True
+        elif raw and any(
+            _metric_or_none(raw, name) is not None
+            for name in ("annualized_return", "sharpe_ratio", "max_drawdown", "win_rate")
+        ):
+            window_recomputed.append(run_id)
+
+        excess_series = (
+            excess_aligned.filter(pl.col("run_id") == run_id)["excess_nav"]
+            if not excess_aligned.is_empty()
+            else None
+        )
+        excess_last = None if excess_series is None else _last_value(excess_series)
+        kpi["excess_total_return"] = None if excess_last is None else excess_last - 1.0
+
         active = None
-        if benchmark_id and not benchmark_nav.is_empty():
-            bench = benchmark_nav.select("trade_date", pl.col("ret_1d").alias("benchmark_ret"))
+        if benchmark_id and not benchmark_returns.is_empty() and "ret_1d" in own.columns:
             aligned = (
                 own.select("trade_date", "ret_1d")
-                .join(bench, on="trade_date", how="inner")
+                .join(benchmark_returns, on="trade_date", how="inner")
                 .drop_nulls()
             )
             if not aligned.is_empty():
                 active = aligned["ret_1d"] - aligned["benchmark_ret"]
-        kpi["excess_total_return"] = (
-            float(excess_wide[run_id][-1] - 1.0)
-            if run_id in excess_wide.columns and not excess_wide.is_empty()
-            else None
-        )
         kpi["tracking_error"] = tracking_error(active) if active is not None else None
         kpi["information_ratio"] = information_ratio(active) if active is not None else None
+
+        for name in kpi_names:
+            if kpi.get(name) is None:
+                missing_kpi.setdefault(name, []).append(run_id)
+
         rows.append(
             {
                 "run_id": run_id,
@@ -209,16 +302,28 @@ def build_factor_strategy_comparison(
                 "model_type": pl.Utf8(),
                 "benchmark_id": pl.Utf8(),
                 "compare_mode": pl.Utf8(),
-                "total_return": pl.Float64(),
-                "annualized_return": pl.Float64(),
-                "sharpe_ratio": pl.Float64(),
-                "max_drawdown": pl.Float64(),
-                "win_rate": pl.Float64(),
-                "excess_total_return": pl.Float64(),
-                "tracking_error": pl.Float64(),
-                "information_ratio": pl.Float64(),
+                **{name: pl.Float64() for name in kpi_names},
             }
         )
+    else:
+        compare_table = compare_table.with_columns(
+            [pl.col(name).cast(pl.Float64) for name in kpi_names]
+        )
+
+    if stored_used:
+        notes.append("部分 run 的 KPI 使用已存 bt_run_metrics（所选窗口完整覆盖 run 区间）")
+    if window_recomputed:
+        notes.append(
+            "已存 bt_run_metrics 未覆盖所选窗口，已按窗口重算：" + "、".join(window_recomputed)
+        )
+    missing_note = _kpi_missing_note(missing_kpi)
+    if missing_note:
+        notes.append(missing_note)
+    notes.append(
+        "KPI 口径：所选窗口 "
+        f"{start.isoformat() if start else '最早'} ~ {end.isoformat() if end else '最新'}，"
+        f"主基准 {benchmark_id or '未选'}；数据不足的指标置空（N/A）"
+    )
 
     rank_ic = get_rank_ic_series(env, run_ids, refresh_token=refresh_token)
     if rank_ic.is_empty():

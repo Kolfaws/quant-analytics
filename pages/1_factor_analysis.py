@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Final
 
 import streamlit as st
 from loguru import logger
@@ -17,19 +18,18 @@ from quant_analytics.charts import (
 )
 from quant_analytics.db import (
     DataAccessError,
+    FactorData,
+    db_cache_token,
     get_available_options,
     get_factor_data,
     get_factor_date_range,
 )
 from quant_analytics.logging_utils import configure_logging
-from quant_analytics.metrics import (
-    calc_daily_ic,
-    calc_ic_summary,
-    calc_quantile_returns,
-    calc_return_statistics,
-    calc_turnover,
-)
+from quant_analytics.services.factor_service import load_factor_analysis
 from quant_analytics.theme import is_dark, theme_caption
+
+#: 因子页默认起点：2010 研究库从 2010-01-04 开始，不再硬编码 2015。
+DEFAULT_START_DATE: Final[date] = date(2010, 1, 1)
 
 st.set_page_config(page_title="因子深度分析", page_icon=":material/science:", layout="wide")
 configure_logging()
@@ -47,10 +47,23 @@ def _num(value: float | None, digits: int = 2) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
+def _factor_label(item: dict[str, str]) -> str:
+    direction = item.get("direction", "1")
+    suffix = " · 负向" if direction == "-1" else ""
+    return f"{item['label']}{suffix}"
+
+
+def _render_sample_notes(data: FactorData) -> None:
+    st.caption(f"因子方向：{data.direction_label}")
+    for line in data.report.describe():
+        st.caption(line)
+
+
 env_label = st.sidebar.radio("数据环境", ["正式", "测试"], horizontal=True, key="data_env")
 env = "test" if env_label == "测试" else "prod"
+cache_token = db_cache_token(env) ^ db_cache_token(env, "backtest")
 
-_, _, factors = get_available_options(env=env)
+_, _, factors = get_available_options(env=env, cache_token=cache_token)
 
 with st.sidebar:
     st.header("因子分析")
@@ -60,19 +73,19 @@ with st.sidebar:
     factor = st.selectbox(
         "因子",
         factors,
-        format_func=lambda item: item["label"],
+        format_func=_factor_label,
     )
     factor_name = factor["factor_name"]
-    factor_range = get_factor_date_range(factor_name, env=env)
+    factor_range = get_factor_date_range(factor_name, env=env, cache_token=cache_token)
 
     if factor_range:
         min_date, max_date = factor_range
-        default_start = max(min_date, date(2015, 1, 1))
+        default_start = max(min_date, DEFAULT_START_DATE)
         default_end = max_date
         if default_start > default_end:
             default_start = min_date
     else:
-        min_date, max_date = date(2015, 1, 1), date.today()
+        min_date, max_date = DEFAULT_START_DATE, date.today()
         default_start, default_end = min_date, max_date
 
     start_date = st.date_input(
@@ -96,17 +109,20 @@ if start_date > end_date:
 
 try:
     with st.spinner("计算因子指标…"):
-        raw = get_factor_data(factor_name, start_date.isoformat(), end_date.isoformat(), env=env)
-        ic_df = calc_daily_ic(raw)
-        ic_summary = calc_ic_summary(ic_df)
-        daily = calc_quantile_returns(raw, n_groups=n_groups)
-        turnover = calc_turnover(raw, n_groups=n_groups)
-        long_short = (
-            daily.select("trade_date", "long_short_ret")
-            .unique(subset=["trade_date"], keep="first")
-            .sort("trade_date")
+        analysis = load_factor_analysis(
+            factor_name,
+            start_date.isoformat(),
+            end_date.isoformat(),
+            n_groups=n_groups,
+            env=env,
+            cache_token=cache_token,
         )
-        ls_stats = calc_return_statistics(long_short["long_short_ret"])
+        factor_data = analysis.factor_data
+        ic_df = analysis.ic_df
+        ic_summary = analysis.ic_summary
+        daily = analysis.daily
+        turnover = analysis.turnover
+        ls_stats = analysis.ls_stats
 except DataAccessError as exc:
     st.error(str(exc))
     st.stop()
@@ -120,6 +136,7 @@ if ic_df.is_empty():
     st.stop()
 
 st.caption(f"{start_date} ~ {end_date} · {ic_df.height:,} 个交易日")
+_render_sample_notes(factor_data)
 
 kpi = st.columns(6)
 kpi[0].metric("Rank IC 均值", _num(ic_summary["rank_ic_mean"], 4))
@@ -128,6 +145,7 @@ kpi[2].metric("IC 胜率", _pct(ic_summary["rank_ic_win_rate"]))
 kpi[3].metric("多空夏普", _num(ls_stats["sharpe"]))
 kpi[4].metric("多空年化", _pct(ls_stats["annual_return"]))
 kpi[5].metric("多空最大回撤", _pct(ls_stats["max_drawdown"]))
+st.caption("以上为描述性统计，不构成因子有效性结论；单年/小样本结果只用于流程检查。")
 
 if show_ic_curve:
     ic_left, ic_right = st.columns(2)
